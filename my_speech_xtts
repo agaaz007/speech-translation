@@ -1,0 +1,58 @@
+import os
+import torch
+import soundfile as sf
+from TTS.tts.configs.xtts_config import XttsConfig
+from TTS.tts.models.xtts import Xtts
+
+def main():
+    # -------------------------------
+    # Paths and Configuration
+    # -------------------------------
+    # Update these paths to your actual file locations.
+    config_path = "/Users/Agaaz/Downloads/XTTS-v2/config.json"       # Path to Xtts config file
+    checkpoint_dir = "/Users/Agaaz/Downloads/XTTS-v2"              # Directory containing the checkpoint file(s)
+    speaker_wav = "/data/TTS-public/_refclips/3.wav" # Reference audio of the target speaker
+    output_path = "output.wav"                       # Where to save the synthesized audio
+
+    # -------------------------------
+    # Load Configuration and Initialize Model
+    # -------------------------------
+    config = XttsConfig()
+    config.load_json(config_path)
+
+    # Initialize model from the configuration.
+    model = Xtts.init_from_config(config)
+    model.load_checkpoint(config, checkpoint_dir=checkpoint_dir, eval=True)
+
+    # Move model to GPU if available
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model.to(device)
+
+    # -------------------------------
+    # Synthesize Speech
+    # -------------------------------
+    # Get text input from the user (or use a default text)
+    text = input("Enter the text to synthesize: ").strip()
+    if not text:
+        text = "It took me quite a long time to develop a voice and now that I have it I am not going to be silent."
+
+    # Synthesize speech.
+    # 'gpt_cond_len' is a parameter controlling GPT-2 conditioning length.
+    # 'language' should match the language of the model (e.g., "en").
+    outputs = model.synthesize(
+        text,
+        config,
+        speaker_wav=speaker_wav,
+        gpt_cond_len=3,
+        language="en",
+    )
+
+    # -------------------------------
+    # Save the Output Audio
+    # -------------------------------
+    # Assume outputs is a numpy array representing the waveform.
+    sf.write(output_path, outputs, config.audio.sample_rate)
+    print(f"✅ Synthesis complete! Output saved at: {output_path}")
+
+if __name__ == "__main__":
+    main()

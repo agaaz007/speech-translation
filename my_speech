@@ -1,0 +1,108 @@
+import os
+import torch
+import sounddevice as sd
+import soundfile as sf
+from openvoice import se_extractor
+from openvoice.api import ToneColorConverter
+from melo.api import TTS
+
+# -------------------------------
+# Paths and Configuration
+# -------------------------------
+# Path to the converter checkpoint (OpenVoiceV2)
+CKPT_CONVERTER = "/Users/Agaaz/Downloads/checkpoints_v2/converter"
+# Path to the base speaker embeddings (for example, from the 'ses' folder)
+BASE_SPEAKER_DIR = "/Users/Agaaz/Downloads/checkpoints_v2/base_speakers/ses"
+# Output directory for generated files
+OUTPUT_DIR = "outputs_v2"
+# Path to save the recorded reference audio
+REFERENCE_AUDIO = os.path.join(OUTPUT_DIR, "reference.wav")
+
+# Ensure output directory exists
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# -------------------------------
+# Record a 10-second Reference Audio
+# -------------------------------
+def record_reference_audio():
+    duration = 100     # seconds
+    samplerate = 24000 # Hz
+    channels = 1       # Mono
+    print("🎤 Recording a 100-second reference audio. Please speak clearly...")
+    recording = sd.rec(int(duration * samplerate), samplerate=samplerate, channels=channels, dtype="float32")
+    sd.wait()
+    sf.write(REFERENCE_AUDIO, recording, samplerate)
+    print(f"✅ Reference audio saved at: {REFERENCE_AUDIO}")
+
+# -------------------------------
+# Initialize Tone Color Converter
+# -------------------------------
+def initialize_converter():
+    device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    config_path = os.path.join(CKPT_CONVERTER, "config.json")
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"❌ Missing config.json at {config_path}")
+    print("🔄 Loading OpenVoiceV2 Tone Color Converter...")
+    tone_color_converter = ToneColorConverter(config_path, device=device)
+    tone_color_converter.load_ckpt(os.path.join(CKPT_CONVERTER, "checkpoint.pth"))
+    return tone_color_converter, device
+
+# -------------------------------
+# Main Function
+# -------------------------------
+def main():
+    # Step 1: Record a 10-second reference audio clip
+    record_reference_audio()
+    
+    # Step 2: Initialize Tone Color Converter
+    tone_color_converter, device = initialize_converter()
+    
+    # Step 3: Get text input from the user
+    text = input("📝 Enter the text to convert into speech in your own voice: ")
+    
+    # Step 4: Load MeloTTS as the base TTS model
+    print("🔄 Loading MeloTTS model...")
+    language = "EN"  # Change if desired
+    speed = 1.0
+    melo_tts = TTS(language=language, device=device)
+    speaker_ids = melo_tts.hps.data.spk2id
+    selected_speaker = "EN-BR"  # Change as desired
+    if selected_speaker not in speaker_ids:
+        raise ValueError(f"❌ Speaker '{selected_speaker}' not found. Available: {list(speaker_ids.keys())}")
+    speaker_id = speaker_ids[selected_speaker]
+    source_se_path = os.path.join(BASE_SPEAKER_DIR, f"{selected_speaker}.pth")
+    if not os.path.exists(source_se_path):
+        raise FileNotFoundError(f"❌ Speaker embedding '{source_se_path}' not found.")
+    
+    # Load source speaker embedding
+    source_se = torch.load(source_se_path, map_location=device)
+    
+    # Step 5: Generate TTS audio with MeloTTS
+    src_path = os.path.join(OUTPUT_DIR, "tmp.wav")
+    print("🎤 Generating TTS audio...")
+    melo_tts.tts_to_file(text, speaker_id, src_path, speed=speed)
+    
+    # Step 6: Extract target tone color embedding from reference audio
+    print("🔄 Extracting target speaker embedding from reference audio...")
+    try:
+        target_se, _ = se_extractor.get_se(REFERENCE_AUDIO, tone_color_converter, vad=True)
+    except AttributeError as e:
+        # If extraction is not supported by the current model, fallback to using the source embedding.
+        print("⚠️ Tone extraction not supported by the model. Falling back to using the source speaker embedding.")
+        target_se = source_se
+    
+    # Step 7: Convert the TTS output to match the reference speaker’s tone
+    final_output = os.path.join(OUTPUT_DIR, "output_cloned.wav")
+    print("🔄 Converting tone color to match reference speaker...")
+    tone_color_converter.convert(
+        audio_src_path=src_path,
+        src_se=source_se,
+        tgt_se=target_se,
+        output_path=final_output,
+        message="@MyShell"
+    )
+    
+    print(f"✅ Speech synthesis complete! Output saved at: {final_output}")
+
+if __name__ == "__main__":
+    main()
